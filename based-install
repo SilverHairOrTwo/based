@@ -1,0 +1,229 @@
+#!/bin/bash
+
+set -e
+
+##############
+# root check #
+##############
+
+if [[ -z "$DESTDIR" ]] && [[ "$EUID" != 0 ]]; then
+	printf '%s\n' 'e: must be run as root'
+	exit 1
+fi
+
+#############
+# variables #
+#############
+
+# not strictly necessary, but for reference
+packages_to_download=()
+package_names_to_download=()
+local_packages_to_install=()
+
+packages_to_install=()
+package_names_to_install=()
+
+skipped_package_names=()
+
+#############
+# functions #
+#############
+
+run_hooks() {
+	printf '%s\n' 'i: running package hooks...'
+
+	package_index=0
+
+	for package_name in "${package_names_to_install[@]}"; do
+		for _package_name in "${skipped_package_names[@]}"; do
+			if [[ "$package_name" == "${_package_name}" ]]; then
+				skip_package='true'
+			fi
+		done
+
+		if [[ "$skip_package" == 'true' ]]; then
+			continue
+		fi
+
+		printf '%s\n' "($(( package_index + 1 ))/${#packages_to_install[@]}) running hooks for ${package_name}..."
+
+		if [[ -f "${DESTDIR}/usr/lib/based/pkgs/${package_name}/hooks/install" ]]; then
+			if [[ -z "${DESTDIR}" ]]; then
+				"/usr/lib/based/pkgs/${package_name}/hooks/install" || true
+			else
+				chroot "${DESTDIR}" "/usr/lib/based/pkgs/${package_name}/hooks/install" || true
+			fi
+		fi
+	done
+
+	printf '%s\n\n' 'i: ran all package hooks.'
+}
+
+install_local_package() {
+	package="$1"
+	package_name="$2"
+
+	printf '%s\n' "($(( package_index + 1 ))/${#packages_to_install[@]}) installing ${package_name}..."
+
+	DESTDIR="$(realpath "${DESTDIR}")"
+
+	if [[ -d "${DESTDIR}/usr/lib/based/pkgs/${package_name}" ]]; then
+		skipped_package_names+=("$package_name")
+		>&2 printf '%s\n' "${package_name}: already installed"
+		>&2 printf '%s\n' "${package_name}: update support not yet implemented; skipping package."
+		return
+	fi
+
+	mkdir -p "${DESTDIR}/usr/lib/based/pkgs/${package_name}"
+	pushd "${DESTDIR}/usr/lib/based/pkgs/${package_name}" >/dev/null
+
+	tar -xf "${package}"
+
+	if [[ -d contents ]]; then
+		find contents \( -type f -o -type l \) -print0 | cut -c 9- | while read -d $'\0' file; do
+			if [[ -e "${DESTDIR}/$file" ]]; then
+				popd >/dev/null
+				rm -rf "${DESTDIR}/usr/lib/based/pkgs/${package_name}"
+				>&2 printf '%s\n' "${package_name}: '${file}' already exists on host; skipping package."
+				return 1
+			fi
+		done || { skipped_package_names+=("$package_name"); return 0; }
+
+		cp -a contents/. "${DESTDIR}"
+
+		find contents \( -type f -o -type l \) -print0 | cut -c 9- > contents.txt
+		rm -rf contents
+	fi
+
+	popd >/dev/null
+}
+
+install_local_packages() {
+	printf '%s\n' 'i: parsing package metadata...'
+	for package in "$@"; do
+		package_metadata="$(tar -axf "${package}" ./pkg/manifest.yml -O)"
+		if [[ ! -z "$(yq <(printf '%s' "${package_metadata}") 1>/dev/null)" ]]; then
+			>&2 printf "e: invald package $(basename "${package}")"
+			exit 1
+		fi
+
+		package_name="$(tar -axf "${package}" ./pkg/manifest.yml -O | yq .name)"
+		for _package_name in "${package_names_to_install[@]}"; do
+			if [[ "$package_name" == "${_package_name}" ]]; then
+				skip_package='true'
+			fi
+		done
+		if [[ "$skip_package" == 'true' ]]; then
+			continue
+		fi
+
+		packages_to_install+=("${package}")
+		package_names_to_install+=("${package_name}")
+	done
+
+	printf '%s\n' 'i: installing packages:'
+	for package in "${package_names_to_install[@]}"; do
+		printf '	%s\n' "$(basename "${package}")"
+	done
+	printf '\n'
+
+	if [[ "$BASED_NONINTERACTIVE" != 'true' ]]; then
+		read -p 'proceed? [y/n] ' proceed
+
+		if [[ "${proceed,,}" != 'y' ]] && [[ "${proceed,,}" != 'yes' ]] && [[ "$proceed" != '' ]]; then
+			exit
+		fi
+	fi
+	printf '\n'
+
+	package_index=0
+	for package in "${packages_to_install[@]}"; do
+		install_local_package "${package}" "${package_names_to_install[$package_index]}"
+		(( package_index++ )) || true
+	done
+	printf '\n%s\n\n' 'installed all packages.'
+}
+
+download_packages() {
+	printf '%s\n' 'i: downloading packages:'
+	for package in "$@"; do
+		printf '	%s\n' "$package"
+	done
+	printf '\n'
+
+	if [[ "$BASED_NONINTERACTIVE" != 'true' ]]; then
+		read -p 'proceed? [y/n] ' proceed
+
+		if [[ "${proceed,,}" != 'y' ]] && [[ "${proceed,,}" != 'yes' ]] && [[ "$proceed" != '' ]]; then
+			exit
+		fi
+	fi
+	printf '\n'
+
+	for package in "$@"; do
+		# TODO: download package and append to local_packages_to_install
+		printf '%s\n' "downloading ${package}..."
+	done
+	printf '%s\n\n' 'downloaded all packages.'
+}
+
+remote_package_name() {
+	# TODO: add logic to check if remote package exists
+	# TODO: add support for dependency resolution
+	printf '%s' "$1-1.0.0-1:some_repo"
+}
+
+resolve_packages() {
+	for package in "$@"; do
+		if [[ -f "$package" ]]; then
+			local_packages_to_install+=("$(realpath "$package")")
+		elif [[ "$package" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+			package_to_download="$(remote_package_name "$package")"
+			if [[ ! -z "$package_to_download" ]]; then
+				for package_name in "${package_names_to_download[@]}"; do
+					if [[ "$package" == "$package_name" ]]; then
+						skip_package='true'
+					fi
+				done
+				if [[ "$skip_package" != 'true' ]]; then
+					package_names_to_download+=("$package")
+					packages_to_download+=("$package_to_download")
+				fi
+			else
+				>&2 printf '%s\n' "e: package '${package}' does not exist in any repository."
+				exit 1
+			fi
+		else
+			>&2 printf '%s\n' "e: invalid package name '${package}'"
+			exit 1
+		fi
+	done
+}
+
+########
+# main #
+########
+
+resolve_packages "${@:2}"
+
+if (( "${#packages_to_download[@]}" > 0 )); then
+	download_packages "${packages_to_download[@]}"
+fi
+
+install_local_packages "${local_packages_to_install[@]}"
+
+run_hooks
+
+if (( "${#skipped_package_names[@]}" > 0 )); then
+	printf '%s\n' 'e: the installation of the following packages was skipped:'
+	for skipped_package_name in "${skipped_package_names[@]}"; do
+		printf '%s\n' "	${skipped_package_name}"
+	done
+	printf '\n'
+fi
+
+printf '%s\n' 'i: operation complete.'
+
+if (( "${#skipped_package_names[@]}" > 0 )); then
+	exit 1
+fi

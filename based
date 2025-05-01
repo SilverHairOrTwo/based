@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# fail on error
+set -e
+
+# based directory
+orig_path="$(dirname "$0")"
+
+# usage
+usage() {
+	cat <<'EOF'
+usage: based [command]
+
+available commands:
+	install
+	remove
+	build
+EOF
+}
+
+if [[ -z "$1" ]]; then
+	usage
+fi
+
+case "$1" in
+	install)
+		"${orig_path}/based-install" "$@"
+		;;
+	remove)
+		"${orig_path}/based-remove" "$@"
+		;;
+	build)
+		"${orig_path}/based-build" "$@"
+		;;
+	*)
+		usage
+		;;
+esac

@@ -1,0 +1,14 @@
+#!/bin/bash
+
+set -e
+
+##############
+# root check #
+##############
+
+if [[ -z "$DESTDIR" ]] && [[ "$EUID" -eq 0 ]]; then
+	printf '%s\n' 'e: must be run as root'
+	exit 1
+fi
+
+# TODO: implement package removal support

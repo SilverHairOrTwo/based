@@ -1,0 +1,219 @@
+#!/bin/bash
+
+# fail on error
+set -e
+
+# based directory
+orig_path="$(dirname "$0")"
+
+#############
+# variables #
+#############
+
+# not strictly necessary, but for reference
+pkgname=""
+pkgarch=""
+pkgversion=""
+pkgrevision=""
+pkgdescription=""
+
+pkgdepends=()
+pkgrecommends=()
+pkgconflicts=()
+
+pkgpull_script=""
+pkgversion_script=""
+pkgbuild_script=""
+pkginstall_script=""
+
+pkginstall_hook=""
+pkgremove_hook=""
+
+#############
+# functions #
+#############
+
+parse_pkgyml() {
+	# function to parse pkg.yml
+
+	for variable in name arch version revision description; do
+		# read each variable
+		local var_tmp="$(yq ".${variable}" pkg.yml)"
+
+		# check if any of these variables' missing
+		if [[ "${var_tmp}" == "null" ]] || [[ -z "${var_tmp}" ]]; then
+			>&2 printf '%s\n' "e: missing or empty ${variable}"
+			exit
+		fi
+
+		declare -g "pkg${variable}"="${var_tmp}"
+	done
+
+	for list in depends recommends conflicts; do
+		# set value of each list if it exists
+		if [[ "$(yq ".${list}" pkg.yml)" != "null" ]]; then
+			readarray -t "pkg${list}" < <(yq ".${list}[]" pkg.yml)
+		fi
+	done
+
+	for script in pull build install; do
+		# read each script
+		local script_tmp="$(yq ".${script}" pkg.yml)"
+
+		# set to '' if missing
+		if [[ "${script_tmp}" == "null" ]]; then
+			script_tmp=""
+		fi
+
+		declare -g "pkg${script}_script"="${script_tmp}"
+	done
+
+	for hook in install remove; do
+		# read each hook
+		local hook_tmp="$(yq ".${hook}" pkg.yml)"
+
+		# set to '' if missing
+		if [[ "${hook_tmp}" == "null" ]]; then
+			hook_tmp=""
+		fi
+
+		declare -g "pkg${hook}_hook"="${hook_tmp}"
+	done
+}
+
+validate_pkgyml() {
+	# validate package name
+	if [[ ! "$pkgname" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+		>&2 printf '%s\n' 'e: invalid package name'
+		>&2 printf '%s\n' '   It may only include alphanumeric characters, hyphens or underscores.'
+		exit 1
+	fi
+
+	# validate package version
+	if [[ ! "$pkgversion" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
+		>&2 printf '%s\n' "e: invalid package version ${pkgversion}"
+		>&2 printf '%s\n' '   It may only include alphanumeric characters, hyphens, periods or underscores.'
+		exit 1
+	fi
+
+	# validate package revision
+	if [[ ! "$pkgrevision" =~ ^[0-9]+$ ]]; then
+		>&2 printf '%s\n' 'e: invalid package revision'
+		>&2 printf '%s\n' '   It may only include numbers.'
+		exit 1
+	fi
+
+	# validate package architecture
+	if [[ "$pkgarch" != 'any' ]] && [[ "$pkgarch" != 'all' ]]; then
+		if [[ "$pkgarch" != "$(uname -m | tr -d '\n')" ]]; then
+			>&2 printf '%s\n' 'e: cannot build package'
+			>&2 printf '%s\n' "   Cannot build for ${pkgarch} on a(n) $(uname -m | tr -d '\n') machine."
+			exit 1
+		fi
+	fi
+
+	# TODO: resolve makedepends
+}
+
+build_package() {
+	# recreate .based_build if already exists
+	rm -rf .based_build && mkdir -p .based_build/{src,pkg/{pkg,hooks,contents}}
+
+	# set variables for scripts
+	export nproc="$(nproc)"
+	export pkgver="${pkgversion}"
+	export pkgsrc="${PWD}/.based_build/src"
+	export pkgdir="${PWD}/.based_build/pkg/contents"
+
+	# run pull script
+	printf '%s\n' "i: pulling package..."
+	pushd "$pkgsrc" > /dev/null
+	if ! bash <(printf '%s' "${pkgpull_script}"); then
+		>&2 printf '%s\n' 'e: failed to pull package'
+		exit 1
+	fi
+	popd > /dev/null
+
+	# run build script
+	printf '%s\n' "i: building package..."
+	pushd "$pkgsrc" > /dev/null
+	if ! bash <(printf '%s' "${pkgbuild_script}"); then
+		>&2 printf '%s\n' 'e: failed to build package'
+		exit 1
+	fi
+	popd > /dev/null
+
+	# run install script
+	printf '%s\n' "i: installing files to package..."
+	pushd "$pkgsrc" > /dev/null
+	if ! bash <(printf '%s' "${pkginstall_script}"); then
+		>&2 printf '%s\n' 'e: failed to install files to package directory'
+		exit 1
+	fi
+	popd > /dev/null
+
+	# copy package hooks
+	printf '%s\n' "i: creating package hooks..."
+	pushd "$pkgsrc" > /dev/null
+	printf '%s\n%s' '#!/bin/bash' "${pkginstall_script}" > "../pkg/hooks/install"
+	printf '%s\n%s' '#!/bin/bash' "${pkgremove_script}" > "../pkg/hooks/remove"
+	chmod 755 ../pkg/hooks/install
+	chmod 755 ../pkg/hooks/remove
+	popd > /dev/null
+
+	# set package version
+	pkgversion="${pkgversion}-${pkgrevision}"
+	printf '%s\n' "i: package version: ${pkgversion}"
+}
+
+generate_package_manifest() {
+	# function to generate the package's manifest.yml file
+
+	pushd ".based_build/pkg/pkg" > /dev/null
+
+	if [[ "$pkgarch" == "all" ]]; then
+		pkgarch="$(uname -m | tr -d '\n')"
+	fi
+
+	cat > manifest.yml <<EOF
+name: ${pkgname}
+arch: ${pkgarch}
+version: ${pkgversion}
+description: ${pkgdescription}
+depends: $(jq -cj -n '$ARGS.positional' --args "${pkgdepends[@]}")
+recommends: $(jq -cj -n '$ARGS.positional' --args "${pkgrecommends[@]}")
+conflicts: $(jq -cj -n '$ARGS.positional' --args "${pkgconflicts[@]}")
+EOF
+
+	popd > /dev/null
+}
+
+generate_package() {
+	# function to compress the package
+
+	pushd ".based_build/pkg" > /dev/null
+	fakeroot tar -czf "../../${pkgname}-${pkgversion}.based.tgz" .
+	popd > /dev/null
+}
+
+########
+# main #
+########
+
+if [[ ! -f pkg.yml ]]; then
+	echo 'e: no pkg.yml file in the current directory'
+fi
+
+printf '%s\n' "i: reading pkg.yml..."
+parse_pkgyml
+validate_pkgyml
+
+printf '%s\n' "i: building package ${pkgname}..."
+build_package
+
+printf '%s\n' "i: generating package manifest..."
+generate_package_manifest
+
+printf '%s\n' "i: compressing package..."
+generate_package
+printf '\n%s\n%s\n' "i: successful package build" "built package: ${pkgname}-${pkgversion}.based.tgz"
