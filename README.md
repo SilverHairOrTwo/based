@@ -10,6 +10,7 @@ The package manager for Project Based.
 - [ ] `based-install`: Remote package repository support
 - [ ] `based-*`: Dependency resolution
 - [ ] `based-build`: Split package support
+- [ ] `based-show`: Display package information
 
 ## Credits
 

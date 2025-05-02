@@ -70,7 +70,7 @@ parse_pkgyml() {
 
 	for hook in install remove; do
 		# read each hook
-		local hook_tmp="$(yq ".${hook}" pkg.yml)"
+		local hook_tmp="$(yq ".${hook}_hook" pkg.yml)"
 
 		# set to '' if missing
 		if [[ "${hook_tmp}" == "null" ]]; then
