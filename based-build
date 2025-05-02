@@ -156,8 +156,8 @@ build_package() {
 	# copy package hooks
 	printf '%s\n' "i: creating package hooks..."
 	pushd "$pkgsrc" > /dev/null
-	printf '%s\n%s' '#!/bin/bash' "${pkginstall_script}" > "../pkg/hooks/install"
-	printf '%s\n%s' '#!/bin/bash' "${pkgremove_script}" > "../pkg/hooks/remove"
+	printf '%s\n%s' '#!/bin/bash' "${pkginstall_hook}" > "../pkg/hooks/install"
+	printf '%s\n%s' '#!/bin/bash' "${pkgremove_hook}" > "../pkg/hooks/remove"
 	chmod 755 ../pkg/hooks/install
 	chmod 755 ../pkg/hooks/remove
 	popd > /dev/null

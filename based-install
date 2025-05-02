@@ -57,7 +57,11 @@ run_hooks() {
 			if [[ -z "${DESTDIR}" ]]; then
 				"/usr/lib/based/pkgs/${package_name}/hooks/install" || true
 			else
-				chroot "${DESTDIR}" "/usr/lib/based/pkgs/${package_name}/hooks/install" || true
+				if [[ "$EUID" == 0 ]]; then
+					chroot "${DESTDIR}" "/usr/lib/based/pkgs/${package_name}/hooks/install" || true
+				else
+					unshare -UrR "${DESTDIR}" -- "/usr/lib/based/pkgs/${package_name}/hooks/install" || true
+				fi
 			fi
 		fi
 	done
@@ -113,7 +117,7 @@ install_local_package() {
 		rm -rf contents
 	fi
 
-	popd >/dev/null
+	popd &>/dev/null
 }
 
 install_local_packages() {
