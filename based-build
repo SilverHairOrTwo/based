@@ -124,6 +124,7 @@ build_package() {
 	export pkgver="${pkgversion}"
 	export pkgsrc="${PWD}/.based_build/src"
 	export pkgdir="${PWD}/.based_build/pkg/contents"
+	export pkgorigsrc="${PWD}"
 
 	# run pull script
 	printf '%s\n' "i: pulling package..."
