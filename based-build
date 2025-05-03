@@ -117,7 +117,7 @@ validate_pkgyml() {
 
 build_package() {
 	# recreate .based_build if already exists
-	rm -rf .based_build && mkdir -p .based_build/{src,pkg/{pkg,hooks,contents}}
+	rm -rf .based_build && mkdir -p .based_build/{src,pkg/{_pkg,hooks,contents}}
 
 	# set variables for scripts
 	export nproc="$(nproc)"
@@ -170,7 +170,7 @@ build_package() {
 generate_package_manifest() {
 	# function to generate the package's manifest.yml file
 
-	pushd ".based_build/pkg/pkg" > /dev/null
+	pushd ".based_build/pkg/_pkg" > /dev/null
 
 	if [[ "$pkgarch" == "all" ]]; then
 		pkgarch="$(uname -m | tr -d '\n')"
@@ -193,7 +193,7 @@ generate_package() {
 	# function to compress the package
 
 	pushd ".based_build/pkg" > /dev/null
-	fakeroot tar -czf "../../${pkgname}-${pkgversion}.based.tgz" .
+	fakeroot tar --sort=name -czf "../../${pkgname}-${pkgversion}.based.tgz" .
 	popd > /dev/null
 }
 

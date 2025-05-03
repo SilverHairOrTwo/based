@@ -39,6 +39,7 @@ run_hooks() {
 	# iterate through packages installed
 	for package_name in "${package_names_to_install[@]}"; do
 		# skip if package was to be skipped
+		skip_package=
 		for _package_name in "${skipped_package_names[@]}"; do
 			if [[ "$package_name" == "${_package_name}" ]]; then
 				skip_package='true'
@@ -64,6 +65,8 @@ run_hooks() {
 				fi
 			fi
 		fi
+
+		(( package_index++ )) || true
 	done
 
 	printf '%s\n\n' 'i: ran all package hooks.'
@@ -100,24 +103,31 @@ install_local_package() {
 	# check if contents/ directory exists
 	if [[ -d contents ]]; then
 		# check if any file conflicts
-		find contents \( -type f -o -type l \) -print0 | cut -c 9- | while read -d $'\0' file; do
+		find contents -type f -o -type l | cut -c 9- | while IFS= read -d $'\n' file; do
 			if [[ -e "${DESTDIR}/$file" ]]; then
 				popd >/dev/null
 				rm -rf "${DESTDIR}/usr/lib/based/pkgs/${package_name}"
 				>&2 printf '%s\n' "${package_name}: '${file}' already exists on host; skipping package."
 				return 1
 			fi
-		done || { skipped_package_names+=("$package_name"); return 0; }
+		done || { skipped_package_names+=("$package_name"); popd >/dev/null; return 0; }
 
 		# copy contents/* to rootfs
-		cp -a contents/. "${DESTDIR}"
+		cp -a contents/. "${DESTDIR}" || {
+			popd >/dev/null
+			rm -rf "${DESTDIR}/usr/lib/based/pkgs/${package_name}"
+			skipped_package_names+=("$package_name")
+			>&2 printf '%s\n' "${package_name}: failed to copy files; skipping package."
+			return 0
+		}
 
 		# create package index
-		find contents \( -type f -o -type l \) -print0 | cut -c 9- > contents.txt
+		find contents -type f -o -type l | cut -c 9- > contents.txt
+		find contents -type d -empty | cut -c 9- >> contents.txt
 		rm -rf contents
 	fi
 
-	popd &>/dev/null
+	popd >/dev/null
 }
 
 install_local_packages() {
@@ -126,14 +136,15 @@ install_local_packages() {
 	printf '%s\n' 'i: parsing package metadata...'
 	for package in "$@"; do
 		# check if valid metadata file
-		package_metadata="$(tar -axf "${package}" ./pkg/manifest.yml -O)"
+		package_metadata="$(tar -axf "${package}" --occurrence ./_pkg/manifest.yml -O)"
 		if [[ ! -z "$(yq <(printf '%s' "${package_metadata}") 1>/dev/null)" ]]; then
 			>&2 printf "e: invald package $(basename "${package}")"
 			exit 1
 		fi
 
 		# check if package already in list
-		package_name="$(tar -axf "${package}" ./pkg/manifest.yml -O | yq .name)"
+		package_name="$(yq .name <(printf '%s' "${package_metadata}"))"
+		skip_package=
 		for _package_name in "${package_names_to_install[@]}"; do
 			if [[ "$package_name" == "${_package_name}" ]]; then
 				skip_package='true'
@@ -222,6 +233,7 @@ resolve_packages() {
 			package_to_download="$(remote_package_name "$package")"
 			if [[ ! -z "$package_to_download" ]]; then
 				# check if already in list
+				skip_package=
 				for package_name in "${package_names_to_download[@]}"; do
 					if [[ "$package" == "$package_name" ]]; then
 						skip_package='true'
