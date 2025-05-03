@@ -113,7 +113,8 @@ install_local_package() {
 		done || { skipped_package_names+=("$package_name"); popd >/dev/null; return 0; }
 
 		# copy contents/* to rootfs
-		cp -a contents/. "${DESTDIR}" || {
+		cp -a contents/. "${DESTDIR}/" || {
+			# TODO: uninstall package
 			popd >/dev/null
 			rm -rf "${DESTDIR}/usr/lib/based/pkgs/${package_name}"
 			skipped_package_names+=("$package_name")
