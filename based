@@ -20,6 +20,7 @@ EOF
 
 if [[ -z "$1" ]]; then
 	usage
+	exit 0
 fi
 
 case "$1" in
@@ -34,5 +35,6 @@ case "$1" in
 		;;
 	*)
 		usage
+		exit 1
 		;;
 esac
